@@ -14,72 +14,89 @@ const req = request.defaults({
   json: true
 });
 
-let gameData = [];
-let totalChannels = 0;
-let totalViewers = 0;
-let totalPartners = 0;
-let totalPartnerViewers = 0;
-
-function makeRequest(game, limit, offset) {
-  const url = buildURL(game, limit, offset);
+function makeRequest(game, offset, resolve, reject) {
+  const url = buildURL(game, 100, offset);
   console.log("Request: " + url);
-  req(buildURL(game, limit, offset), (err, res, body) => {
-    if (err || res.statusCode !== 200) {
-      console.log(err.message);
-    } else {
-      if (body.streams.length === 0) {
-        return;
-      }
 
-      if (totalChannels === 0) {
-        totalChannels = body._total;
-      }
+  req(url, (err, res, body) => {
+    if (err || res.statusCode !== 200) {
+      reject(err);
+    } else {
+      let channels,
+          viewers = 0,
+          partners = 0,
+          partnerViewers = 0;
+
+      channels = body._total;
 
       body.streams.forEach((stream) => {
-        totalViewers += stream.viewers;
+        viewers += stream.viewers;
+
         if (stream.channel.partner === true) {
-          totalPartners++;
-          totalPartnerViewers += stream.viewers;
+          partners++;
+          partnerViewers += stream.viewers;
         }
       });
 
-      makeRequest(game, limit, offset + 100);
+      resolve({ offset, channels, viewers, partners, partnerViewers });
     }
   });
 }
 
-function captureGameData(game, cb) {
-  makeRequest(game, 100, 0);
+function captureGameData(game, resolve) {
+  let promises = [];
 
-  const data = {
-    game: game,
-    time: new Date().getTime(),
-    totalChannels: totalChannels,
-    totalPartners: totalPartners,
-    totalPartnerViewers: totalPartnerViewers,
-    totalViewers: totalViewers
-  };
+  // Use recursion to continue making requests?
+  let promise = new Promise((resolve, reject) => {
+    makeRequest(game, 0, resolve, reject);
+  });
 
-  gameData.push(data);
-  cb();
+  promises.push(promise);
+
+  promise.then((result) => {
+    if (result.viewers > 0) {
+      let newPromise = new Promise((resolve, reject) => {
+        makeRequest(game, result.offset + 100, resolve, reject);
+      });
+
+      promises.push(newPromise);
+    }
+  });
+
+  Promise.all(promises).then((results) => {
+    let totalChannels;
+    let totalViewers = 0;
+    let totalPartners = 0;
+    let totalPartnerViewers = 0;
+
+    const time = new Date().getTime();
+
+    // Use reduce to get a single object??
+    results.forEach((result) => {
+      totalChannels = result.channels;
+      totalViewers += result.viewers;
+      totalPartners += result.partners;
+      totalPartnerViewers += result.partnerViewers;
+    });
+
+    resolve({ game, time, totalChannels, totalPartners, totalPartnerViewers, totalViewers });
+  });
 };
+
+let requests = games.map((game) => {
+  return new Promise((resolve, reject) => {
+    captureGameData(game, resolve);
+  });
+});
+
+Promise.all(requests).then((results) => {
+  results.forEach(printGame);
+});
 
 function buildURL(game, limit, offset) {
   const resource = "streams/";
   return `${resource}?game=${encodeURIComponent(game)}&limit=${limit}&offset=${offset}`;
 }
-
-function processData() {
-  gameData.forEach(printGame);
-}
-
-let requests = games.map((game) => {
-  return new Promise((resolve) => {
-    captureGameData(game, resolve);
-  });
-});
-
-Promise.all(requests).then(processData);
 
 function printGame(game) {
   console.log("Game: " + game.game);
