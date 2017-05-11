@@ -14,78 +14,78 @@ const req = request.defaults({
   json: true
 });
 
-function makeRequest(game, offset, resolve, reject) {
-  const url = buildURL(game, 100, offset);
-  console.log("Request: " + url);
+function makeRequest(url) {
+  return new Promise((resolve, reject) => {
+    req(url, (err, res, body) => {
+      if (err || res.statusCode !== 200) {
+        console.log(err);
+        reject(err);
+      } else {
+        let data = body.streams.reduce((acc, stream) => {
+          let viewers = acc.viewers + stream.viewers;
+          let partners = acc.partners;
+          let partnerViewers = acc.partnerViewers;
 
-  req(url, (err, res, body) => {
-    if (err || res.statusCode !== 200) {
-      reject(err);
-    } else {
-      let channels,
-          viewers = 0,
-          partners = 0,
-          partnerViewers = 0;
+          if (stream.channel.partner === true) {
+            partners++;
+            partnerViewers += stream.viewers;
+          }
 
-      channels = body._total;
+          return { viewers, partners, partnerViewers };
+        }, { viewers: 0, partners: 0, partnerViewers: 0 });
 
-      body.streams.forEach((stream) => {
-        viewers += stream.viewers;
+        data.channels = body._total;
 
-        if (stream.channel.partner === true) {
-          partners++;
-          partnerViewers += stream.viewers;
-        }
-      });
-
-      resolve({ offset, channels, viewers, partners, partnerViewers });
-    }
+        resolve(data);
+      }
+    });
   });
 }
 
-function captureGameData(game, resolve) {
-  let promises = [];
+function captureGameData(game, time, limit, resolve, reject) {
+  const initialOffset = 0;
+  const initialUrl = buildUrl(game, limit, initialOffset);
 
-  // Use recursion to continue making requests?
-  let promise = new Promise((resolve, reject) => {
-    makeRequest(game, 0, resolve, reject);
-  });
+  makeRequest(initialUrl).then((stream) => {
+    const pageCount = Math.floor((stream.channels / limit));
+    var reqests = [];
 
-  promises.push(promise);
+    for (let i = 0; i < pageCount; i++) {
+      const offset = (i + 1) * limit;
+      const url = buildUrl(game, limit, offset);
 
-  promise.then((result) => {
-    if (result.viewers > 0) {
-      let newPromise = new Promise((resolve, reject) => {
-        makeRequest(game, result.offset + 100, resolve, reject);
-      });
-
-      promises.push(newPromise);
+      requests.push(makeRequest(url));
     }
-  });
 
-  Promise.all(promises).then((results) => {
-    let totalChannels;
-    let totalViewers = 0;
-    let totalPartners = 0;
-    let totalPartnerViewers = 0;
+    return Promise.all(requests);
+  }).then((streams) => {
+    let data = streams.reduce((acc, stream) => {
+      let channels = stream.channels;
+      let viewers = acc.viewers + stream.viewers;
+      let partners = acc.partners + stream.partners;
+      let partnerViewers = acc.partnerViewers + stream.partnerViewers;
 
-    const time = new Date().getTime();
+      return { channels, viewers, partners, partnerViewers };
+    }, { viewers: 0, partners: 0, partnerViewers: 0 });
 
-    // Use reduce to get a single object??
-    results.forEach((result) => {
-      totalChannels = result.channels;
-      totalViewers += result.viewers;
-      totalPartners += result.partners;
-      totalPartnerViewers += result.partnerViewers;
-    });
+    data.game = game;
+    data.time = time;
 
-    resolve({ game, time, totalChannels, totalPartners, totalPartnerViewers, totalViewers });
+    console.log("HERE");
+
+    resolve(data);
+  }).catch((err) => {
+    console.log(err);
+    reject(err);
   });
 };
 
+const time = new Date().getTime();
+const limit = 100;
+
 let requests = games.map((game) => {
   return new Promise((resolve, reject) => {
-    captureGameData(game, resolve);
+    captureGameData(game, time, limit, resolve, reject);
   });
 });
 
@@ -93,7 +93,7 @@ Promise.all(requests).then((results) => {
   results.forEach(printGame);
 });
 
-function buildURL(game, limit, offset) {
+function buildUrl(game, limit, offset) {
   const resource = "streams/";
   return `${resource}?game=${encodeURIComponent(game)}&limit=${limit}&offset=${offset}`;
 }
