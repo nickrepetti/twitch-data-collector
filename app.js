@@ -48,7 +48,7 @@ function captureGameData(req, game, time, limit, resolve, reject) {
     partners = stream.partners;
     partnerViewers = stream.partnerViewers;
 
-    const pageCount = Math.floor((stream.channels / limit));
+    const pageCount = Math.floor(stream.channels / limit);
     let requests = [];
 
     for (let i = 0; i < pageCount; i++) {
@@ -66,7 +66,7 @@ function captureGameData(req, game, time, limit, resolve, reject) {
       let partnerViewers = acc.partnerViewers + stream.partnerViewers;
 
       return { viewers, partners, partnerViewers };
-    }, { viewers: viewers, partners: partners, partnerViewers: partnerViewers });
+    }, { viewers, partners, partnerViewers });
 
     data.game = game;
     data.time = time;
