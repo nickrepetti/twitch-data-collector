@@ -5,16 +5,7 @@ const request = require("request");
 
 const games = JSON.parse(fs.readFileSync("./games.json", "utf8"));
 
-const req = request.defaults({
-  baseUrl: "https://api.twitch.tv/kraken/",
-  headers: {
-    "Accept": "application/vnd.twitchtv.v5+json",
-    "Client-ID": process.env.CLIENT_ID
-  },
-  json: true
-});
-
-function makeRequest(url) {
+function makeRequest(req, url) {
   return new Promise((resolve, reject) => {
     req(url, (err, res, body) => {
       if (err || res.statusCode !== 200) {
@@ -42,36 +33,44 @@ function makeRequest(url) {
   });
 }
 
-function captureGameData(game, time, limit, resolve, reject) {
+function captureGameData(req, game, time, limit, resolve, reject) {
   const initialOffset = 0;
   const initialUrl = buildUrl(game, limit, initialOffset);
 
-  makeRequest(initialUrl).then((stream) => {
+  let channels = 0;
+  let viewers = 0;
+  let partners = 0;
+  let partnerViewers = 0;
+
+  makeRequest(req, initialUrl).then((stream) => {
+    channels = stream.channels;
+    viewers = stream.viewers;
+    partners = stream.partners;
+    partnerViewers = stream.partnerViewers;
+
     const pageCount = Math.floor((stream.channels / limit));
-    var reqests = [];
+    let requests = [];
 
     for (let i = 0; i < pageCount; i++) {
       const offset = (i + 1) * limit;
       const url = buildUrl(game, limit, offset);
 
-      requests.push(makeRequest(url));
+      requests.push(makeRequest(req, url));
     }
 
     return Promise.all(requests);
   }).then((streams) => {
     let data = streams.reduce((acc, stream) => {
-      let channels = stream.channels;
       let viewers = acc.viewers + stream.viewers;
       let partners = acc.partners + stream.partners;
       let partnerViewers = acc.partnerViewers + stream.partnerViewers;
 
-      return { channels, viewers, partners, partnerViewers };
-    }, { viewers: 0, partners: 0, partnerViewers: 0 });
+      return { viewers, partners, partnerViewers };
+    }, { viewers: viewers, partners: partners, partnerViewers: partnerViewers });
 
     data.game = game;
     data.time = time;
-
-    console.log("HERE");
+    data.channels = channels;
 
     resolve(data);
   }).catch((err) => {
@@ -82,10 +81,18 @@ function captureGameData(game, time, limit, resolve, reject) {
 
 const time = new Date().getTime();
 const limit = 100;
+const req = request.defaults({
+  baseUrl: "https://api.twitch.tv/kraken/",
+  headers: {
+    "Accept": "application/vnd.twitchtv.v5+json",
+    "Client-ID": process.env.CLIENT_ID
+  },
+  json: true
+});
 
 let requests = games.map((game) => {
   return new Promise((resolve, reject) => {
-    captureGameData(game, time, limit, resolve, reject);
+    captureGameData(req, game, time, limit, resolve, reject);
   });
 });
 
@@ -103,10 +110,10 @@ function printGame(game) {
   let date = new Date();
   date.setTime(game.time);
   console.log("Time: " + date);
-  console.log("Total Channels: " + game.totalChannels);
-  console.log("Total Viewers: " + game.totalViewers);
-  console.log("Total Partners: " + game.totalPartners);
-  console.log("Total Partner Viewers: " + game.totalPartnerViewers);
+  console.log("Channels: " + game.channels);
+  console.log("Viewers: " + game.viewers);
+  console.log("Partners: " + game.partners);
+  console.log("Partner Viewers: " + game.partnerViewers);
   console.log("----------------------------------\n");
 }
 
