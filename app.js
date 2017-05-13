@@ -1,10 +1,7 @@
 "use strict";
 
-const fs = require("fs");
 const request = require("request");
-
-// Array of games to capture data for.
-const games = JSON.parse(fs.readFileSync("./games.json", "utf8"));
+const pg = require("pg");
 
 // Number of items to get with each request. Max is 100.
 const limit = 100;
@@ -20,19 +17,60 @@ const req = request.defaults({
   json: true
 });
 
-// Initialize the requests for each game.
-let requests = games.map((game) => {
-  return new Promise((resolve, reject) => {
-    captureGameData(req, game, limit, resolve, reject);
-  });
+const client = new pg.Client({
+  user: "postgres",
+  password: "password",
+  database: "twitch",
+  host: "localhost",
+  port: 5432
 });
 
-// Once all requests for all games have been completed, record the results.
-Promise.all(requests).then(recordData);
+client.connect((err) => {
+  if (err) {
+    console.log(err);
+    return;
+  }
 
-// Write the results into a database. All results will share the same timestamp.
+  console.log("Client opened connection to PostgreSQL");
+});
+
+client.query("select * from games")
+.then((result) => {
+  const games = result.rows;
+
+  // Initialize the requests for each game.
+  let requests = games.map((game) => {
+    return new Promise((resolve, reject) => {
+      captureGameData(req, game, limit, resolve, reject);
+    });
+  });
+
+  Promise.all(requests).then(recordData);
+});
+
+// Write the results into the database.
 function recordData(results) {
-  const time = new Date().getTime();
+  const query = "insert into gamedata(gameid, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5)";
+
+  let statements = results.map((game) => {
+    const args = [game.gameid, game.streamCount, game.viewerCount, game.partnerCount, game.partnerViewerCount];
+
+    return new Promise((resolve, reject) => {
+      client.query(query, args, (err, result) => {
+        if (err) {
+          console.log(err);
+          reject(err);
+        } else {
+          resolve();
+        }
+      });
+    });
+  });
+
+  Promise.all(statements).then(() => {
+    client.end();
+    console.log("Client closed connection to PostgreSQL");
+  });
 
   results.forEach(printGame);
 }
@@ -42,25 +80,25 @@ function recordData(results) {
 // that, additional requests are made to capture the rest of the data.
 function captureGameData(req, game, limit, resolve, reject) {
   const initialOffset = 0;
-  const initialUrl = buildUrl(game, limit, initialOffset);
+  const initialUrl = buildUrl(game.name, limit, initialOffset);
 
-  let channels = 0;
-  let viewers = 0;
-  let partners = 0;
-  let partnerViewers = 0;
+  let streamCount = 0;
+  let viewerCount = 0;
+  let partnerCount = 0;
+  let partnerViewerCount = 0;
 
   makeRequest(req, initialUrl).then((stream) => {
-    channels = stream.channels;
-    viewers = stream.viewers;
-    partners = stream.partners;
-    partnerViewers = stream.partnerViewers;
+    streamCount = stream.streamCount;
+    viewerCount = stream.viewerCount;
+    partnerCount = stream.partnerCount;
+    partnerViewerCount = stream.partnerViewerCount;
 
-    const pageCount = Math.floor(stream.channels / limit);
+    const pageCount = Math.floor(stream.streamCount / limit);
     let requests = [];
 
     for (let i = 0; i < pageCount; i++) {
       const offset = (i + 1) * limit;
-      const url = buildUrl(game, limit, offset);
+      const url = buildUrl(game.name, limit, offset);
 
       requests.push(makeRequest(req, url));
     }
@@ -68,15 +106,15 @@ function captureGameData(req, game, limit, resolve, reject) {
     return Promise.all(requests);
   }).then((streams) => {
     let data = streams.reduce((acc, stream) => {
-      let viewers = acc.viewers + stream.viewers;
-      let partners = acc.partners + stream.partners;
-      let partnerViewers = acc.partnerViewers + stream.partnerViewers;
+      let viewerCount = acc.viewerCount + stream.viewerCount;
+      let partnerCount = acc.partnerCount + stream.partnerCount;
+      let partnerViewerCount = acc.partnerViewerCount + stream.partnerViewerCount;
 
-      return { viewers, partners, partnerViewers };
-    }, { viewers, partners, partnerViewers });
+      return { viewerCount, partnerCount, partnerViewerCount };
+    }, { viewerCount, partnerCount, partnerViewerCount });
 
-    data.game = game;
-    data.channels = channels;
+    data.gameid = game.gameid;
+    data.streamCount = streamCount;
 
     resolve(data);
   }).catch((err) => {
@@ -93,20 +131,26 @@ function makeRequest(req, url) {
         console.log(err);
         reject(err);
       } else {
-        let data = body.streams.reduce((acc, stream) => {
-          let viewers = acc.viewers + stream.viewers;
-          let partners = acc.partners;
-          let partnerViewers = acc.partnerViewers;
+        let data = {
+          viewerCount: 0,
+          partnerCount: 0,
+          partnerViewerCount: 0
+        };
+
+        data = body.streams.reduce((acc, stream) => {
+          let viewerCount = acc.viewerCount + stream.viewers;
+          let partnerCount = acc.partnerCount;
+          let partnerViewerCount = acc.partnerViewerCount;
 
           if (stream.channel.partner === true) {
-            partners++;
-            partnerViewers += stream.viewers;
+            partnerCount++;
+            partnerViewerCount += stream.viewers;
           }
 
-          return { viewers, partners, partnerViewers };
-        }, { viewers: 0, partners: 0, partnerViewers: 0 });
+          return { viewerCount, partnerCount, partnerViewerCount };
+        }, data);
 
-        data.channels = body._total;
+        data.streamCount = body._total;
 
         resolve(data);
       }
@@ -122,11 +166,11 @@ function buildUrl(game, limit, offset) {
 }
 
 function printGame(game) {
-  console.log("Game: " + game.game);
-  console.log("Channels: " + game.channels);
-  console.log("Viewers: " + game.viewers);
-  console.log("Partners: " + game.partners);
-  console.log("Partner Viewers: " + game.partnerViewers);
+  console.log("Game ID: " + game.gameid);
+  console.log("Channels: " + game.streamCount);
+  console.log("Viewers: " + game.viewerCount);
+  console.log("Partners: " + game.partnerCount);
+  console.log("Partner Viewers: " + game.partnerViewerCount);
   console.log("----------------------------------\n");
 }
 
