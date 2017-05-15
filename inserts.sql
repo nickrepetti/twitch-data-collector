@@ -1,4 +1,8 @@
+-----------------------------------
+------ Games & GamePlatforms ------
+-----------------------------------
 insert into games(name) values('League of Legends');
+insert into gameplatforms(gameid, platformid) select gameid, platformid from games g, platforms p where g.name = 'League of Legends' and p.name = 'PC';
 
 insert into games(name) values('Counter-Strike: Global Offensive');
 
@@ -119,4 +123,15 @@ insert into games(name) values('Battlefield 1');
 insert into games(name) values('7 Days to Die');
 
 insert into games(name) values('Borderlands 2');
+
+-----------------------------------
+------------ Platforms ------------
+-----------------------------------
+insert into platforms(name) values('Xbox');
+
+insert into platforms(name) values('Playstation');
+
+insert into platforms(name) values('PC');
+
+insert into platforms(name) values('Mobile');
 
