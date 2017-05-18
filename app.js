@@ -6,6 +6,8 @@ const pg = require("pg");
 // Number of items to get with each request. Max is 100.
 const limit = 100;
 
+const query = "insert into gamedata(gameid, language, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5, $6)";
+
 // Default request object initialized with common data/headers so each request 
 // doesn't have to explicitly specify them.
 const req = request.defaults({
@@ -17,6 +19,7 @@ const req = request.defaults({
   json: true
 });
 
+// Initialize PostgreSQL connection credentials.
 const client = new pg.Client({
   user: "postgres",
   password: "password",
@@ -25,55 +28,39 @@ const client = new pg.Client({
   port: 5432
 });
 
+// Connect to the PostgreSQL database.
 client.connect((err) => {
   if (err) {
+    console.log("An error occurred when connecting to PostgreSQL.");
     console.log(err);
     return;
   }
 
-  console.log("Client opened connection to PostgreSQL");
-});
+  console.log("Opened connection to PostgreSQL.");
 
-client.query("select * from games")
-.then((result) => {
-  const games = result.rows;
+  // Grab all games.
+  client.query("select * from games")
+  .then((result) => {
+    const games = result.rows;
 
-  // Initialize the requests for each game.
-  let requests = games.map((game) => {
-    return new Promise((resolve, reject) => {
-      captureGameData(req, game, limit, resolve, reject);
-    });
-  });
-
-  Promise.all(requests).then(recordData);
-});
-
-// Write the results into the database.
-function recordData(results) {
-  const query = "insert into gamedata(gameid, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5)";
-
-  let statements = results.map((game) => {
-    const args = [game.gameid, game.streamCount, game.viewerCount, game.partnerCount, game.partnerViewerCount];
-
-    return new Promise((resolve, reject) => {
-      client.query(query, args, (err, result) => {
-        if (err) {
-          console.log(err);
-          reject(err);
-        } else {
-          resolve();
-        }
+    // Initialize the requests for each game.
+    let requests = games.map((game) => {
+      return new Promise((resolve, reject) => {
+        captureGameData(req, game, limit, resolve, reject);
       });
     });
-  });
 
-  Promise.all(statements).then(() => {
-    client.end();
-    console.log("Client closed connection to PostgreSQL");
+    Promise.all(requests).then(() => {
+      console.log("All games successfully captured.");
+    }).catch((err) => {
+      console.log("An error occurred when capturing games.");
+      console.log(err);
+    }).then(() => {
+      client.end();
+      console.log("Closed connection to PostgreSQL.");
+    });
   });
-
-  results.forEach(printGame);
-}
+});
 
 // Captures all of the data for a given game. An initial request is made to grab
 // the first page of data as well as the number of additional pages. Based on 
@@ -82,21 +69,26 @@ function captureGameData(req, game, limit, resolve, reject) {
   const initialOffset = 0;
   const initialUrl = buildUrl(game.name, limit, initialOffset);
 
+  // Initialize data to be used in the aggregation.
   let streamCount = 0;
   let viewerCount = 0;
   let partnerCount = 0;
   let partnerViewerCount = 0;
 
+  // Make initial request.
   makeRequest(req, initialUrl).then((stream) => {
     streamCount = stream.streamCount;
     viewerCount = stream.viewerCount;
     partnerCount = stream.partnerCount;
     partnerViewerCount = stream.partnerViewerCount;
 
+    // Get the number of pages to make requests for.
     const pageCount = Math.floor(stream.streamCount / limit);
     let requests = [];
 
+    // Build a request for each page.
     for (let i = 0; i < pageCount; i++) {
+      // Calculate the offset for the page.
       const offset = (i + 1) * limit;
       const url = buildUrl(game.name, limit, offset);
 
@@ -105,6 +97,7 @@ function captureGameData(req, game, limit, resolve, reject) {
 
     return Promise.all(requests);
   }).then((streams) => {
+    // All data has been captured, reduce into a single result.
     let data = streams.reduce((acc, stream) => {
       let viewerCount = acc.viewerCount + stream.viewerCount;
       let partnerCount = acc.partnerCount + stream.partnerCount;
@@ -116,7 +109,7 @@ function captureGameData(req, game, limit, resolve, reject) {
     data.gameid = game.gameid;
     data.streamCount = streamCount;
 
-    resolve(data);
+    recordData(data, resolve, reject);
   }).catch((err) => {
     console.log(err);
     reject(err);
@@ -158,6 +151,23 @@ function makeRequest(req, url) {
   });
 }
 
+// Write the results into the database.
+function recordData(game, resolve, reject) {
+  game.metrics.forEach((metric) => {
+    const args = [game.gameId, metric.language, metric.streamCount, metric.viewerCount, metric.partnerCount, metric.partnerViewerCount];
+
+    client.query(query, args, (err, result) => {
+      if (err) {
+        console.log(err);
+        reject(err);
+      } else {
+      printGame(game.gameId, metric);
+        resolve();
+      }
+    });
+  });
+}
+
 // Generate the url for the endpoint to request. Based on the Twitch API v5.
 // https://dev.twitch.tv/docs/v5/reference/streams/#get-live-streams
 function buildUrl(game, limit, offset) {
@@ -165,12 +175,13 @@ function buildUrl(game, limit, offset) {
   return `${resource}?game=${encodeURIComponent(game)}&limit=${limit}&offset=${offset}`;
 }
 
-function printGame(game) {
-  console.log("Game ID: " + game.gameid);
-  console.log("Channels: " + game.streamCount);
-  console.log("Viewers: " + game.viewerCount);
-  console.log("Partners: " + game.partnerCount);
-  console.log("Partner Viewers: " + game.partnerViewerCount);
+function printGame(gameId, metric) {
+  console.log("Game ID: " + gameid);
+  console.log("Language: " + metric.language);
+  console.log("Channels: " + metric.streamCount);
+  console.log("Viewers: " + metric.viewerCount);
+  console.log("Partners: " + metric.partnerCount);
+  console.log("Partner Viewers: " + metric.partnerViewerCount);
   console.log("----------------------------------\n");
 }
 

@@ -1,6 +1,6 @@
 # Twitch Data Collector
 
-A serverless application that collects data from the Twitch API.
+A Node.js serverless application that collects data from the Twitch API.
 
 It is housed on AWS and runs on a scheduled Lambda function.
 
