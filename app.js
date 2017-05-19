@@ -74,13 +74,10 @@ function captureGameData(req, game, limit, resolve, reject) {
 
   // Make initial request.
   makeRequest(req, initialUrl).then((stream) => {
-    gameData.streamCount = stream.streamCount;
-    gameData.viewerCount = stream.viewerCount;
-    gameData.partnerCount = stream.partnerCount;
-    gameData.partnerViewerCount = stream.partnerViewerCount;
+    gameData = stream;
 
     // Get the number of pages to make requests for.
-    const pageCount = Math.floor(stream.streamCount / limit);
+    const pageCount = Math.floor(stream.allStreamCount / limit);
     let requests = [];
 
     // Build a request for each page.
@@ -92,33 +89,31 @@ function captureGameData(req, game, limit, resolve, reject) {
       requests.push(makeRequest(req, url));
     }
 
-    return Promise.all(requests);
+    if (pageCount > 0) {
+      return Promise.all(requests);
+    } else {
+      return Promise.resolve([gameData]);
+    }
   }).then((streams) => {
     // All data has been captured, reduce into a single result.
     let allData = streams.reduce((acc, stream) => {
-      let data = acc[stream.channel.language] || {};
+      // Loop through all languages.
+      for (let language in stream) {
+        if (stream.hasOwnProperty(language)) {
+          let data = acc[language];
 
-      if (data.streamCount === undefined) {
-        data.streamCount = 0;
-      }
-      if (data.viewerCount === undefined) {
-        data.viewerCount = 0;
-      }
-      if (data.partnerCount === undefined) {
-        data.partnerCount = 0;
-      }
-      if (data.partnerViewerCount === undefined) {
-        data.partnerViewerCount = 0;
-      }
+          let languageData = acc[language];
 
-      data.streamCount += stream.streamCount;
-      data.viewerCount += stream.viewerCount;
-      data.partnerCount += stream.partnerCountCount;
-      data.partnerViewerCount += stream.partnerViewerCount;
+          data.streamCount += stream.streamCount;
+          data.viewerCount += stream.viewerCount;
+          data.partnerCount += stream.partnerCountCount;
+          data.partnerViewerCount += stream.partnerViewerCount;
 
-      acc[stream.channel.language] = data;
+          acc[language] = data;
 
-      return acc; 
+          return acc; 
+        }
+      }
     }, gameData);
 
     allData.gameid = game.gameid;
@@ -166,6 +161,8 @@ function makeRequest(req, url) {
 
           return acc;
         }, {});
+
+        allData.allStreamCount = body._total;
 
         resolve(allData);
       }
