@@ -70,17 +70,14 @@ function captureGameData(req, game, limit, resolve, reject) {
   const initialUrl = buildUrl(game.name, limit, initialOffset);
 
   // Initialize data to be used in the aggregation.
-  let streamCount = 0;
-  let viewerCount = 0;
-  let partnerCount = 0;
-  let partnerViewerCount = 0;
+  let gameData = {};
 
   // Make initial request.
   makeRequest(req, initialUrl).then((stream) => {
-    streamCount = stream.streamCount;
-    viewerCount = stream.viewerCount;
-    partnerCount = stream.partnerCount;
-    partnerViewerCount = stream.partnerViewerCount;
+    gameData.streamCount = stream.streamCount;
+    gameData.viewerCount = stream.viewerCount;
+    gameData.partnerCount = stream.partnerCount;
+    gameData.partnerViewerCount = stream.partnerViewerCount;
 
     // Get the number of pages to make requests for.
     const pageCount = Math.floor(stream.streamCount / limit);
@@ -98,18 +95,35 @@ function captureGameData(req, game, limit, resolve, reject) {
     return Promise.all(requests);
   }).then((streams) => {
     // All data has been captured, reduce into a single result.
-    let data = streams.reduce((acc, stream) => {
-      let viewerCount = acc.viewerCount + stream.viewerCount;
-      let partnerCount = acc.partnerCount + stream.partnerCount;
-      let partnerViewerCount = acc.partnerViewerCount + stream.partnerViewerCount;
+    let allData = streams.reduce((acc, stream) => {
+      let data = acc[stream.channel.language] || {};
 
-      return { viewerCount, partnerCount, partnerViewerCount };
-    }, { viewerCount, partnerCount, partnerViewerCount });
+      if (data.streamCount === undefined) {
+        data.streamCount = 0;
+      }
+      if (data.viewerCount === undefined) {
+        data.viewerCount = 0;
+      }
+      if (data.partnerCount === undefined) {
+        data.partnerCount = 0;
+      }
+      if (data.partnerViewerCount === undefined) {
+        data.partnerViewerCount = 0;
+      }
 
-    data.gameid = game.gameid;
-    data.streamCount = streamCount;
+      data.streamCount += stream.streamCount;
+      data.viewerCount += stream.viewerCount;
+      data.partnerCount += stream.partnerCountCount;
+      data.partnerViewerCount += stream.partnerViewerCount;
 
-    recordData(data, resolve, reject);
+      acc[stream.channel.language] = data;
+
+      return acc; 
+    }, gameData);
+
+    allData.gameid = game.gameid;
+
+    recordData(allData, resolve, reject);
   }).catch((err) => {
     console.log(err);
     reject(err);
@@ -124,28 +138,36 @@ function makeRequest(req, url) {
         console.log(err);
         reject(err);
       } else {
-        let data = {
-          viewerCount: 0,
-          partnerCount: 0,
-          partnerViewerCount: 0
-        };
+        let allData = body.streams.reduce((acc, stream) => {
+          let data = acc[stream.channel.language] || {};
 
-        data = body.streams.reduce((acc, stream) => {
-          let viewerCount = acc.viewerCount + stream.viewers;
-          let partnerCount = acc.partnerCount;
-          let partnerViewerCount = acc.partnerViewerCount;
-
-          if (stream.channel.partner === true) {
-            partnerCount++;
-            partnerViewerCount += stream.viewers;
+          if (data.streamCount === undefined) {
+            data.streamCount = 0;
+          }
+          if (data.viewerCount === undefined) {
+            data.viewerCount = 0;
+          }
+          if (data.partnerCount === undefined) {
+            data.partnerCount = 0;
+          }
+          if (data.partnerViewerCount === undefined) {
+            data.partnerViewerCount = 0;
           }
 
-          return { viewerCount, partnerCount, partnerViewerCount };
-        }, data);
+          data.streamCount++;
+          data.viewerCount += stream.viewers;
 
-        data.streamCount = body._total;
+          if (stream.channel.partner === true) {
+            data.partnerCount++;
+            data.partnerViewerCount += stream.viewers;
+          }
 
-        resolve(data);
+          acc[stream.channel.language] = data;
+
+          return acc;
+        }, {});
+
+        resolve(allData);
       }
     });
   });
@@ -154,6 +176,8 @@ function makeRequest(req, url) {
 // Write the results into the database.
 function recordData(game, resolve, reject) {
   game.metrics.forEach((metric) => {
+    printGame(game.gameId, metric);
+    /*
     const args = [game.gameId, metric.language, metric.streamCount, metric.viewerCount, metric.partnerCount, metric.partnerViewerCount];
 
     client.query(query, args, (err, result) => {
@@ -165,6 +189,7 @@ function recordData(game, resolve, reject) {
         resolve();
       }
     });
+    */
   });
 }
 
