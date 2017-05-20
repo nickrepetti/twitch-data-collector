@@ -50,12 +50,12 @@ client.connect((err) => {
       });
     });
 
-    Promise.all(requests).then(() => {
+    Promise.all(requests).then((_) => {
       console.log("All games successfully captured.");
     }).catch((err) => {
       console.log("An error occurred when capturing games.");
       console.log(err);
-    }).then(() => {
+    }).then((_) => {
       client.end();
       console.log("Closed connection to PostgreSQL.");
     });
@@ -70,14 +70,19 @@ function captureGameData(req, game, limit, resolve, reject) {
   const initialUrl = buildUrl(game.name, limit, initialOffset);
 
   // Initialize data to be used in the aggregation.
-  let gameData = {};
+  let initialPageData;
 
   // Make initial request.
-  makeRequest(req, initialUrl).then((stream) => {
-    gameData = stream;
+  makeRequest(req, initialUrl).then((pageData) => {
+    initialPageData = pageData;
 
     // Get the number of pages to make requests for.
-    const pageCount = Math.floor(stream.allStreamCount / limit);
+    const pageCount = Math.floor(pageData.allStreamCount / limit);
+
+    if (pageCount <= 0) {
+      return Promise.resolve([pageData]);
+    }
+
     let requests = [];
 
     // Build a request for each page.
@@ -89,36 +94,58 @@ function captureGameData(req, game, limit, resolve, reject) {
       requests.push(makeRequest(req, url));
     }
 
-    if (pageCount > 0) {
-      return Promise.all(requests);
-    } else {
-      return Promise.resolve([gameData]);
-    }
+    return Promise.all(requests);
   }).then((streams) => {
     // All data has been captured, reduce into a single result.
-    let allData = streams.reduce((acc, stream) => {
+    let gameData = streams.reduce((acc, stream) => {
       // Loop through all languages.
       for (let language in stream) {
-        if (stream.hasOwnProperty(language)) {
-          let data = acc[language];
+        if (stream.hasOwnProperty(language) && language !== "allStreamCount") {
+          let accData = acc[language] || {
+            streamCount: 0,
+            viewerCount: 0,
+            partnerCount: 0,
+            partnerViewerCount: 0
+          };
 
-          let languageData = acc[language];
+          const languageGameData = stream[language];
 
-          data.streamCount += stream.streamCount;
-          data.viewerCount += stream.viewerCount;
-          data.partnerCount += stream.partnerCountCount;
-          data.partnerViewerCount += stream.partnerViewerCount;
+          accData.streamCount += languageGameData.streamCount;
+          accData.viewerCount += languageGameData.viewerCount;
+          accData.partnerCount += languageGameData.partnerCount;
+          accData.partnerViewerCount += languageGameData.partnerViewerCount;
 
-          acc[language] = data;
-
-          return acc; 
+          acc[language] = accData;
         }
       }
-    }, gameData);
 
-    allData.gameid = game.gameid;
+      return acc; 
+    }, {});
 
-    recordData(allData, resolve, reject);
+    // Add data from initial request.
+    for (let language in initialPageData) {
+      if (initialPageData.hasOwnProperty(language) && language !== "allStreamCount") {
+        let languageData = gameData[language] || {
+          streamCount: 0,
+          viewerCount: 0,
+          partnerCount: 0,
+          partnerViewerCount: 0
+        };
+
+        const initialGameData = initialPageData[language];
+
+        languageData.streamCount += initialGameData.streamCount;
+        languageData.viewerCount += initialGameData.viewerCount;
+        languageData.partnerCount += initialGameData.partnerCount;
+        languageData.partnerViewerCount += initialGameData.partnerViewerCount;
+
+        gameData[language] = languageData;
+      }
+    }
+
+    gameData.gameId = game.gameid;
+
+    recordData(gameData, resolve, reject);
   }).catch((err) => {
     console.log(err);
     reject(err);
@@ -134,20 +161,12 @@ function makeRequest(req, url) {
         reject(err);
       } else {
         let allData = body.streams.reduce((acc, stream) => {
-          let data = acc[stream.channel.language] || {};
-
-          if (data.streamCount === undefined) {
-            data.streamCount = 0;
-          }
-          if (data.viewerCount === undefined) {
-            data.viewerCount = 0;
-          }
-          if (data.partnerCount === undefined) {
-            data.partnerCount = 0;
-          }
-          if (data.partnerViewerCount === undefined) {
-            data.partnerViewerCount = 0;
-          }
+          let data = acc[stream.channel.language] || {
+            streamCount: 0,
+            viewerCount: 0,
+            partnerCount: 0,
+            partnerViewerCount: 0
+          };
 
           data.streamCount++;
           data.viewerCount += stream.viewers;
@@ -171,23 +190,23 @@ function makeRequest(req, url) {
 }
 
 // Write the results into the database.
-function recordData(game, resolve, reject) {
-  game.metrics.forEach((metric) => {
-    printGame(game.gameId, metric);
-    /*
-    const args = [game.gameId, metric.language, metric.streamCount, metric.viewerCount, metric.partnerCount, metric.partnerViewerCount];
+function recordData(gameData, resolve, reject) {
+  for (let language in gameData) {
+    if (gameData.hasOwnProperty(language) && language !== "gameId") {
+      const languageData = gameData[language];
 
-    client.query(query, args, (err, result) => {
-      if (err) {
-        console.log(err);
-        reject(err);
-      } else {
-      printGame(game.gameId, metric);
-        resolve();
-      }
-    });
-    */
-  });
+      const args = [gameData.gameId, language, languageData.streamCount, languageData.viewerCount, languageData.partnerCount, languageData.partnerViewerCount];
+
+      client.query(query, args, (err, result) => {
+        if (err) {
+          console.log(err);
+          reject(err);
+        }
+      });
+    }
+  }
+
+  resolve();
 }
 
 // Generate the url for the endpoint to request. Based on the Twitch API v5.
@@ -197,13 +216,13 @@ function buildUrl(game, limit, offset) {
   return `${resource}?game=${encodeURIComponent(game)}&limit=${limit}&offset=${offset}`;
 }
 
-function printGame(gameId, metric) {
-  console.log("Game ID: " + gameid);
-  console.log("Language: " + metric.language);
-  console.log("Channels: " + metric.streamCount);
-  console.log("Viewers: " + metric.viewerCount);
-  console.log("Partners: " + metric.partnerCount);
-  console.log("Partner Viewers: " + metric.partnerViewerCount);
+function printGame(gameId, language, languageData) {
+  console.log("Game ID: " + gameId);
+  console.log("Language: " + language);
+  console.log("Channels: " + languageData.streamCount);
+  console.log("Viewers: " + languageData.viewerCount);
+  console.log("Partners: " + languageData.partnerCount);
+  console.log("Partner Viewers: " + languageData.partnerViewerCount);
   console.log("----------------------------------\n");
 }
 
