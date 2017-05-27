@@ -50,17 +50,22 @@ client.connect((err) => {
       });
     });
 
-    Promise.all(requests).then((_) => {
+    return Promise.all(requests).then((_) => {
       console.log("All games successfully captured.");
     }).catch((err) => {
       console.log("An error occurred when capturing games.");
       console.log(err);
-    }).then((_) => {
-      client.end();
+    });
+  })
+  .then((_) => {
+    client.on("drain", client.end.bind(client));
+
+    client.on("end", (_) => {
       console.log("Closed connection to PostgreSQL.");
     });
   });
 });
+
 
 // Captures all of the data for a given game. An initial request is made to grab
 // the first page of data as well as the number of additional pages. Based on 
