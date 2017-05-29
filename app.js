@@ -104,49 +104,13 @@ function captureGameData(req, game, limit, resolve, reject) {
     // All data has been captured, reduce into a single result.
     let gameData = streams.reduce((acc, stream) => {
       // Loop through all languages.
-      for (let language in stream) {
-        if (stream.hasOwnProperty(language) && language !== "allStreamCount") {
-          let accData = acc[language] || {
-            streamCount: 0,
-            viewerCount: 0,
-            partnerCount: 0,
-            partnerViewerCount: 0
-          };
-
-          const languageGameData = stream[language];
-
-          accData.streamCount += languageGameData.streamCount;
-          accData.viewerCount += languageGameData.viewerCount;
-          accData.partnerCount += languageGameData.partnerCount;
-          accData.partnerViewerCount += languageGameData.partnerViewerCount;
-
-          acc[language] = accData;
-        }
-      }
+      calculateGameData(stream, acc);
 
       return acc; 
     }, {});
 
     // Add data from initial request.
-    for (let language in initialPageData) {
-      if (initialPageData.hasOwnProperty(language) && language !== "allStreamCount") {
-        let languageData = gameData[language] || {
-          streamCount: 0,
-          viewerCount: 0,
-          partnerCount: 0,
-          partnerViewerCount: 0
-        };
-
-        const initialGameData = initialPageData[language];
-
-        languageData.streamCount += initialGameData.streamCount;
-        languageData.viewerCount += initialGameData.viewerCount;
-        languageData.partnerCount += initialGameData.partnerCount;
-        languageData.partnerViewerCount += initialGameData.partnerViewerCount;
-
-        gameData[language] = languageData;
-      }
-    }
+    calculateGameData(initialPageData, gameData);
 
     gameData.gameId = game.gameid;
 
@@ -166,12 +130,7 @@ function makeRequest(req, url) {
         reject(err);
       } else {
         let allData = body.streams.reduce((acc, stream) => {
-          let data = acc[stream.channel.language] || {
-            streamCount: 0,
-            viewerCount: 0,
-            partnerCount: 0,
-            partnerViewerCount: 0
-          };
+          let data = acc[stream.channel.language] || createEmptyGameData();
 
           data.streamCount++;
           data.viewerCount += stream.viewers;
@@ -219,6 +178,32 @@ function recordData(gameData, resolve, reject) {
 function buildUrl(game, limit, offset) {
   const resource = "streams/";
   return `${resource}?game=${encodeURIComponent(game)}&limit=${limit}&offset=${offset}`;
+}
+
+function calculateGameData(stream, gameData) {
+  for (let language in stream) {
+    if (stream.hasOwnProperty(language) && language !== "allStreamCount") {
+      let languageData = gameData[language] || createEmptyGameData();
+
+      const languageGameData = stream[language];
+
+      languageData.streamCount += languageGameData.streamCount;
+      languageData.viewerCount += languageGameData.viewerCount;
+      languageData.partnerCount += languageGameData.partnerCount;
+      languageData.partnerViewerCount += languageGameData.partnerViewerCount;
+
+      gameData[language] = languageData;
+    }
+  }
+}
+
+function createEmptyGameData() {
+  return {
+    streamCount: 0,
+    viewerCount: 0,
+    partnerCount: 0,
+    partnerViewerCount: 0
+  };
 }
 
 function printGame(gameId, language, languageData) {
