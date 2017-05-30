@@ -3,10 +3,16 @@
 const request = require("request");
 const pg = require("pg");
 
+const PG_URL = process.env.PG_URL;
+const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID;
+
+const client = new pg.Client(PG_URL);
+
 // Number of items to get with each request. Max is 100.
 const limit = 100;
 
-const query = "insert into gamedata(gameid, language, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5, $6)";
+const QUERY_GAMEDATA_CREATE = "insert into gamedata(gameid, language, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5, $6)";
+const QUERY_GAMES_GETALL = "select * from games";
 
 // Default request object initialized with common data/headers so each request 
 // doesn't have to explicitly specify them.
@@ -14,58 +20,50 @@ const req = request.defaults({
   baseUrl: "https://api.twitch.tv/kraken/",
   headers: {
     "Accept": "application/vnd.twitchtv.v5+json",
-    "Client-ID": process.env.CLIENT_ID
+    "Client-ID": TWITCH_CLIENT_ID
   },
   json: true
 });
 
-// Initialize PostgreSQL connection credentials.
-const client = new pg.Client({
-  user: "postgres",
-  password: "password",
-  database: "twitch",
-  host: "localhost",
-  port: 5432
-});
+module.exports.captureCurrentGames = (event, context, callback) => {
+  // Connect to the PostgreSQL database.
+  client.connect((err) => {
+    if (err) {
+      console.error("An error occurred when connecting to PostgreSQL.");
+      return callback(err);
+    }
 
-// Connect to the PostgreSQL database.
-client.connect((err) => {
-  if (err) {
-    console.log("An error occurred when connecting to PostgreSQL.");
-    console.log(err);
-    return;
-  }
+    console.info("Opened connection to PostgreSQL.");
 
-  console.log("Opened connection to PostgreSQL.");
+    // Grab all games.
+    client.query(QUERY_GAMES_GETALL)
+    .then((result) => {
+      const games = result.rows;
 
-  // Grab all games.
-  client.query("select * from games")
-  .then((result) => {
-    const games = result.rows;
+      // Initialize the requests for each game.
+      let requests = games.map((game) => {
+        return new Promise((resolve, reject) => {
+          captureGameData(req, game, limit, resolve, reject);
+        });
+      });
 
-    // Initialize the requests for each game.
-    let requests = games.map((game) => {
-      return new Promise((resolve, reject) => {
-        captureGameData(req, game, limit, resolve, reject);
+      return Promise.all(requests).then((_) => {
+        console.info("All games successfully captured.");
+      }).catch((err) => {
+        console.error("An error occurred when capturing games.");
+        console.error(err);
+      });
+    })
+    .then((_) => {
+      client.on("drain", client.end.bind(client));
+
+      client.on("end", (_) => {
+        console.info("Closed connection to PostgreSQL.");
+        callback();
       });
     });
-
-    return Promise.all(requests).then((_) => {
-      console.log("All games successfully captured.");
-    }).catch((err) => {
-      console.log("An error occurred when capturing games.");
-      console.log(err);
-    });
-  })
-  .then((_) => {
-    client.on("drain", client.end.bind(client));
-
-    client.on("end", (_) => {
-      console.log("Closed connection to PostgreSQL.");
-    });
   });
-});
-
+};
 
 // Captures all of the data for a given game. An initial request is made to grab
 // the first page of data as well as the number of additional pages. Based on 
@@ -116,7 +114,7 @@ function captureGameData(req, game, limit, resolve, reject) {
 
     recordData(gameData, resolve, reject);
   }).catch((err) => {
-    console.log(err);
+    console.error(err);
     reject(err);
   });
 };
@@ -126,7 +124,7 @@ function makeRequest(req, url) {
   return new Promise((resolve, reject) => {
     req(url, (err, res, body) => {
       if (err || res.statusCode !== 200) {
-        console.log(err);
+        console.error(err);
         reject(err);
       } else {
         let allData = body.streams.reduce((acc, stream) => {
@@ -161,9 +159,9 @@ function recordData(gameData, resolve, reject) {
 
       const args = [gameData.gameId, language, languageData.streamCount, languageData.viewerCount, languageData.partnerCount, languageData.partnerViewerCount];
 
-      client.query(query, args, (err, result) => {
+      client.query(QUERY_GAMEDATA_CREATE, args, (err, result) => {
         if (err) {
-          console.log(err);
+          console.error(err);
           reject(err);
         }
       });
@@ -204,15 +202,5 @@ function createEmptyGameData() {
     partnerCount: 0,
     partnerViewerCount: 0
   };
-}
-
-function printGame(gameId, language, languageData) {
-  console.log("Game ID: " + gameId);
-  console.log("Language: " + language);
-  console.log("Channels: " + languageData.streamCount);
-  console.log("Viewers: " + languageData.viewerCount);
-  console.log("Partners: " + languageData.partnerCount);
-  console.log("Partner Viewers: " + languageData.partnerViewerCount);
-  console.log("----------------------------------\n");
 }
 
