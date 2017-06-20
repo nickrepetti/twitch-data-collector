@@ -3,15 +3,14 @@
 const request = require("request");
 const pg = require("pg");
 
-const PG_URL = process.env.PG_URL;
 const TWITCH_CLIENT_ID = process.env.TWITCH_CLIENT_ID;
-
-const client = new pg.Client(PG_URL);
+let client;
 
 // Number of items to get with each request. Max is 100.
 const limit = 100;
 
 const QUERY_GAMEDATA_CREATE = "insert into gamedata(gameid, language, streamcount, viewercount, partnercount, partnerviewercount) values($1, $2, $3, $4, $5, $6)";
+const QUERY_RAWDATA_CREATE = "insert into rawdata(gameid, rawdata) values($1, $2)";
 const QUERY_GAMES_GETALL = "select * from games";
 
 // Default request object initialized with common data/headers so each request 
@@ -26,10 +25,13 @@ const req = request.defaults({
 });
 
 module.exports.captureCurrentGames = (event, context, callback) => {
+  client = new pg.Client();
+
   // Connect to the PostgreSQL database.
   client.connect((err) => {
     if (err) {
       console.error("An error occurred when connecting to PostgreSQL.");
+      console.error(err);
       return callback(err);
     }
 
@@ -59,7 +61,7 @@ module.exports.captureCurrentGames = (event, context, callback) => {
 
       client.on("end", (_) => {
         console.info("Closed connection to PostgreSQL.");
-        callback();
+        callback(null, "Success");
       });
     });
   });
@@ -69,6 +71,8 @@ module.exports.captureCurrentGames = (event, context, callback) => {
 // the first page of data as well as the number of additional pages. Based on 
 // that, additional requests are made to capture the rest of the data.
 function captureGameData(req, game, limit, resolve, reject) {
+  console.info("Capturing game data for game: " + game.name + ".");
+
   const initialOffset = 0;
   const initialUrl = buildUrl(game.name, limit, initialOffset);
 
@@ -76,7 +80,7 @@ function captureGameData(req, game, limit, resolve, reject) {
   let initialPageData;
 
   // Make initial request.
-  makeRequest(req, initialUrl).then((pageData) => {
+  makeRequest(req, initialUrl, game).then((pageData) => {
     initialPageData = pageData;
 
     // Get the number of pages to make requests for.
@@ -94,7 +98,7 @@ function captureGameData(req, game, limit, resolve, reject) {
       const offset = (i + 1) * limit;
       const url = buildUrl(game.name, limit, offset);
 
-      requests.push(makeRequest(req, url));
+      requests.push(makeRequest(req, url, game));
     }
 
     return Promise.all(requests);
@@ -114,19 +118,34 @@ function captureGameData(req, game, limit, resolve, reject) {
 
     recordData(gameData, resolve, reject);
   }).catch((err) => {
+    console.error("Error capturing game data for game: " + game.name + ".");
     console.error(err);
     reject(err);
   });
 };
 
 // Make a request to get a single page of data.
-function makeRequest(req, url) {
+function makeRequest(req, url, game) {
   return new Promise((resolve, reject) => {
     req(url, (err, res, body) => {
       if (err || res.statusCode !== 200) {
-        console.error(err);
+        console.error("Error making request for game: " + game.name + ".");
+        if (err) {
+          console.error(err);
+        }
         reject(err);
       } else {
+        // Capture raw json
+        const args = [game.gameid, JSON.stringify(body)];
+
+        client.query(QUERY_RAWDATA_CREATE, args, (err, result) => {
+          if (err) {
+            console.error("Error capturing raw json data.");
+            console.error(err);
+            reject(err);
+          }
+        });
+
         let allData = body.streams.reduce((acc, stream) => {
           let data = acc[stream.channel.language] || createEmptyGameData();
 
@@ -161,6 +180,7 @@ function recordData(gameData, resolve, reject) {
 
       client.query(QUERY_GAMEDATA_CREATE, args, (err, result) => {
         if (err) {
+          console.error("Error writing captured game data to database.");
           console.error(err);
           reject(err);
         }

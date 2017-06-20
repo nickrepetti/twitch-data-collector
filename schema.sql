@@ -24,3 +24,10 @@ create table gamedata(
   partnerviewercount int4                                         not null
 );
 
+create table rawdata(
+  rawdataid          serial4     primary key                      not null,
+  gameid             serial2     references games(gameid)         not null,
+  timestamp          timestamptz default now()                    not null,
+  rawdata            jsonb                                        not null
+);
+
